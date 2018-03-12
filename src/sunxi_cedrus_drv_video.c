@@ -184,7 +184,7 @@ VAStatus VA_DRIVER_INIT_FUNC(VADriverContextP ctx)
 	assert(object_heap_init(&driver_data->image_heap,
 			sizeof(struct object_image), IMAGE_ID_OFFSET)==0);
 
-	driver_data->mem2mem_fd = open("/dev/video0", O_RDWR | O_NONBLOCK, 0);
+	driver_data->mem2mem_fd = open("/dev/video1", O_RDWR | O_NONBLOCK, 0);
 	assert(driver_data->mem2mem_fd >= 0);
 
 	for (int i = 0; i < INPUT_BUFFERS_NB; i++)
@@ -193,7 +193,7 @@ VAStatus VA_DRIVER_INIT_FUNC(VADriverContextP ctx)
 	assert(ioctl(driver_data->mem2mem_fd, VIDIOC_QUERYCAP, &cap)==0);
 	if (!(cap.capabilities & V4L2_CAP_VIDEO_M2M_MPLANE))
 	{
-		sunxi_cedrus_msg("/dev/video0 does not support m2m_mplane\n");
+		sunxi_cedrus_msg("/dev/video1 does not support m2m_mplane\n");
 		return VA_STATUS_ERROR_OPERATION_FAILED;
 	}
 
