@@ -67,12 +67,10 @@ VAStatus sunxi_cedrus_Terminate(VADriverContextP ctx)
 	object_buffer_p obj_buffer;
 	object_config_p obj_config;
 	object_heap_iterator iter;
-	enum v4l2_buf_type type;
 
-	type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
-	ioctl(driver_data->mem2mem_fd, VIDIOC_STREAMOFF, &type);
-	type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
-	ioctl(driver_data->mem2mem_fd, VIDIOC_STREAMOFF, &type);
+	for (int i = 0; i < INPUT_BUFFERS_NB; i++)
+		if (driver_data->request_fds[i] >= 0)
+			close(driver_data->request_fds[i]);
 
 	close(driver_data->mem2mem_fd);
 
@@ -184,11 +182,15 @@ VAStatus VA_DRIVER_INIT_FUNC(VADriverContextP ctx)
 	assert(object_heap_init(&driver_data->image_heap,
 			sizeof(struct object_image), IMAGE_ID_OFFSET)==0);
 
+	printf("driver init, opening v4l2!\n");
+
 	driver_data->mem2mem_fd = open("/dev/video1", O_RDWR | O_NONBLOCK, 0);
 	assert(driver_data->mem2mem_fd >= 0);
 
-	for (int i = 0; i < INPUT_BUFFERS_NB; i++)
+	for (int i = 0; i < INPUT_BUFFERS_NB; i++) {
 		driver_data->request_fds[i] = -1;
+		driver_data->slice_offset[i] = 0;
+	}
 
 	assert(ioctl(driver_data->mem2mem_fd, VIDIOC_QUERYCAP, &cap)==0);
 	if (!(cap.capabilities & V4L2_CAP_VIDEO_M2M_MPLANE))

@@ -58,19 +58,28 @@ VAStatus sunxi_cedrus_BeginPicture(VADriverContextP ctx, VAContextID context,
 	object_context_p obj_context;
 	object_surface_p obj_surface;
 
+	printf("> %s(%d)\n", __func__, render_target);
+
 	obj_context = CONTEXT(context);
 	assert(obj_context);
 
 	obj_surface = SURFACE(render_target);
 	assert(obj_surface);
 
-	if(obj_surface->status == VASurfaceRendering)
-		sunxi_cedrus_SyncSurface(ctx, render_target);
+	if (obj_surface->status == VASurfaceRendering) {
+printf("%s: Go to rendering\n", __func__);
+		vaStatus = sunxi_cedrus_SyncSurface(ctx, render_target);
+		if (vaStatus != VA_STATUS_SUCCESS)
+			return vaStatus;
+	}
 
 	obj_surface->status = VASurfaceRendering;
 	obj_surface->request = (obj_context->num_rendered_surfaces)%INPUT_BUFFERS_NB+1;
 	obj_surface->input_buf_index = obj_context->num_rendered_surfaces%INPUT_BUFFERS_NB;
 	obj_context->num_rendered_surfaces ++;
+
+printf("%s: surface %d\n", __func__, obj_surface->input_buf_index);
+//	driver_data->slice_offset[obj_surface->input_buf_index] = 0;
 
 	obj_context->current_render_target = obj_surface->base.id;
 
@@ -87,6 +96,8 @@ VAStatus sunxi_cedrus_RenderPicture(VADriverContextP ctx, VAContextID context,
 	object_config_p obj_config;
 	int i;
 
+	printf("> %s()\n", __func__);
+
 	obj_context = CONTEXT(context);
 	assert(obj_context);
 
@@ -100,9 +111,14 @@ VAStatus sunxi_cedrus_RenderPicture(VADriverContextP ctx, VAContextID context,
 	obj_surface = SURFACE(obj_context->current_render_target);
 	assert(obj_surface);
 
+	printf("%s: current render surface: %d\n", __func__, obj_context->current_render_target);
+	printf("%s: surface index %d\n", __func__, obj_surface->input_buf_index);
+	printf("%s: rendering %d buffers\n", __func__, num_buffers);
+
 	/* verify that we got valid buffer references */
 	for(i = 0; i < num_buffers; i++)
 	{
+		printf("%s: buffer %d\n", __func__, buffers[i]);
 		object_buffer_p obj_buffer = BUFFER(buffers[i]);
 		assert(obj_buffer);
 		if (NULL == obj_buffer)
@@ -118,16 +134,23 @@ VAStatus sunxi_cedrus_RenderPicture(VADriverContextP ctx, VAContextID context,
 					vaStatus = sunxi_cedrus_render_mpeg2_slice_data(ctx, obj_context, obj_surface, obj_buffer);
 				else if(obj_buffer->type == VAPictureParameterBufferType)
 					vaStatus = sunxi_cedrus_render_mpeg2_picture_parameter(ctx, obj_context, obj_surface, obj_buffer);
+				else if(obj_buffer->type == VASliceParameterBufferType)
+					vaStatus = sunxi_cedrus_render_mpeg2_slice_parameter(ctx, obj_context, obj_surface, obj_buffer);
+				else
+printf("%s: MPEG2 profile else\n", __func__);
 				break;
 			case VAProfileMPEG4Simple:
 			case VAProfileMPEG4AdvancedSimple:
 			case VAProfileMPEG4Main:
+printf("%s: MPEG4 profile type %d among %d/%d/%d\n", __func__, obj_buffer->type, VASliceDataBufferType, VAPictureParameterBufferType, VASliceParameterBufferType);
 				if(obj_buffer->type == VASliceDataBufferType)
 					vaStatus = sunxi_cedrus_render_mpeg4_slice_data(ctx, obj_context, obj_surface, obj_buffer);
 				else if(obj_buffer->type == VAPictureParameterBufferType)
 					vaStatus = sunxi_cedrus_render_mpeg4_picture_parameter(ctx, obj_context, obj_surface, obj_buffer);
 				else if(obj_buffer->type == VASliceParameterBufferType)
 					vaStatus = sunxi_cedrus_render_mpeg4_slice_parameter(ctx, obj_context, obj_surface, obj_buffer);
+				else
+printf("%s: MPEG4 profile else\n", __func__);
 				break;
 			default:
 				break;
@@ -151,6 +174,9 @@ VAStatus sunxi_cedrus_EndPicture(VADriverContextP ctx, VAContextID context)
 	struct media_request_new media_request;
 	object_config_p obj_config;
 	int request_fd;
+int rc;
+
+	printf("> %s()\n", __func__);
 
 	obj_context = CONTEXT(context);
 	assert(obj_context);
@@ -172,17 +198,21 @@ VAStatus sunxi_cedrus_EndPicture(VADriverContextP ctx, VAContextID context)
 	 * order the different RenderPicture will be called.
 	 */
 
-	if(driver_data->request_fds[obj_surface->input_buf_index] < 0) {
-		assert(ioctl(driver_data->mem2mem_fd, VIDIOC_NEW_REQUEST, &media_request)==0);
-		driver_data->request_fds[obj_surface->input_buf_index] = media_request.fd;
-	}
+	printf("%s: current render surface: %d\n", __func__, obj_context->current_render_target);
+	printf("%s: surface index %d\n", __func__, obj_surface->input_buf_index);
 
 	request_fd = driver_data->request_fds[obj_surface->input_buf_index];
+
+	if(request_fd < 0) {
+		assert(ioctl(driver_data->mem2mem_fd, VIDIOC_NEW_REQUEST, &media_request)==0);
+		driver_data->request_fds[obj_surface->input_buf_index] = media_request.fd;
+		request_fd = media_request.fd;
+	}
 
 	memset(plane, 0, sizeof(struct v4l2_plane));
 	memset(planes, 0, 2 * sizeof(struct v4l2_plane));
 	memset(&ctrl, 0, sizeof(struct v4l2_ext_control));
-	memset(&ctrls, 0, sizeof(struct v4l2_ext_control));
+	memset(&ctrls, 0, sizeof(struct v4l2_ext_controls));
 
 	memset(&(out_buf), 0, sizeof(out_buf));
 	out_buf.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
@@ -194,7 +224,13 @@ VAStatus sunxi_cedrus_EndPicture(VADriverContextP ctx, VAContextID context)
 	switch(obj_config->profile) {
 		case VAProfileMPEG2Simple:
 		case VAProfileMPEG2Main:
-			out_buf.m.planes[0].bytesused = obj_context->mpeg2_frame_hdr.slice_len/8;
+printf("%s: MPEG2 profile\n", __func__);
+	obj_context->mpeg2_frame_hdr.slice_pos = 0;
+	obj_context->mpeg2_frame_hdr.slice_len = driver_data->slice_offset[obj_surface->input_buf_index] * 8;
+printf("%s: MPEG2 slice len total is %d\n", __func__, obj_context->mpeg2_frame_hdr.slice_len);
+
+			out_buf.m.planes[0].bytesused = driver_data->slice_offset[obj_surface->input_buf_index];
+printf("%s: ending on %d bytes used\n", __func__, out_buf.m.planes[0].bytesused);
 			ctrl.id = V4L2_CID_MPEG_VIDEO_MPEG2_FRAME_HDR;
 			ctrl.ptr = &obj_context->mpeg2_frame_hdr;
 			ctrl.size = sizeof(obj_context->mpeg2_frame_hdr);
@@ -202,18 +238,22 @@ VAStatus sunxi_cedrus_EndPicture(VADriverContextP ctx, VAContextID context)
 		case VAProfileMPEG4Simple:
 		case VAProfileMPEG4AdvancedSimple:
 		case VAProfileMPEG4Main:
+printf("%s: MPEG4 profile\n", __func__);
 			out_buf.m.planes[0].bytesused = obj_context->mpeg4_frame_hdr.slice_len/8;
 			ctrl.id = V4L2_CID_MPEG_VIDEO_MPEG4_FRAME_HDR;
 			ctrl.ptr = &obj_context->mpeg4_frame_hdr;
 			ctrl.size = sizeof(obj_context->mpeg4_frame_hdr);
 			break;
 		default:
+printf("%s: MPEG2 dummy/fallback non-profile\n", __func__);
 			out_buf.m.planes[0].bytesused = 0;
 			ctrl.id = V4L2_CID_MPEG_VIDEO_MPEG2_FRAME_HDR;
 			ctrl.ptr = NULL;
 			ctrl.size = 0;
 			break;
 	}
+
+	driver_data->slice_offset[obj_surface->input_buf_index] = 0;
 
 	memset(&(cap_buf), 0, sizeof(cap_buf));
 	cap_buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
@@ -226,15 +266,18 @@ VAStatus sunxi_cedrus_EndPicture(VADriverContextP ctx, VAContextID context)
 	ctrls.count = 1;
 	ctrls.request_fd = request_fd;
 
-	assert(ioctl(driver_data->mem2mem_fd, VIDIOC_S_EXT_CTRLS, &ctrls)==0);
+	rc = ioctl(driver_data->mem2mem_fd, VIDIOC_S_EXT_CTRLS, &ctrls);
+
+	if (rc) {
+		printf("ioctl VIDIOC_S_EXT_CTRLS failed with %d/%d/%s\n", rc, errno, strerror(errno));
+		assert(0);
+	}
 
 	out_buf.request_fd = request_fd;
 
 	if(ioctl(driver_data->mem2mem_fd, VIDIOC_QBUF, &cap_buf)) {
 		obj_surface->status = VASurfaceSkipped;
 		sunxi_cedrus_msg("Error when queuing output: %s\n", strerror(errno));
-
-		ioctl(request_fd, MEDIA_REQUEST_IOC_REINIT, NULL);
 		return VA_STATUS_ERROR_UNKNOWN;
 	}
 
@@ -243,11 +286,10 @@ VAStatus sunxi_cedrus_EndPicture(VADriverContextP ctx, VAContextID context)
 		sunxi_cedrus_msg("Error when queuing input: %s\n", strerror(errno));
 
 		ioctl(driver_data->mem2mem_fd, VIDIOC_DQBUF, &cap_buf);
-		ioctl(request_fd, MEDIA_REQUEST_IOC_REINIT, NULL);
 		return VA_STATUS_ERROR_UNKNOWN;
 	}
 
-	assert(ioctl(request_fd, MEDIA_REQUEST_IOC_SUBMIT, NULL)==0);
+//	sunxi_cedrus_SyncSurface(ctx, obj_context->current_render_target);
 
 	/* For now, assume that we are done with rendering right away */
 	obj_context->current_render_target = -1;

@@ -48,6 +48,9 @@ VAStatus sunxi_cedrus_render_mpeg2_slice_data(VADriverContextP ctx,
 	struct v4l2_buffer buf;
 	struct v4l2_plane plane[1];
 
+	printf("> %s()\n", __func__);
+
+#if 0
 	memset(plane, 0, sizeof(struct v4l2_plane));
 
 	/* Query */
@@ -59,16 +62,31 @@ VAStatus sunxi_cedrus_render_mpeg2_slice_data(VADriverContextP ctx,
 	buf.m.planes = plane;
 
 	assert(ioctl(driver_data->mem2mem_fd, VIDIOC_QUERYBUF, &buf)==0);
+#endif
 
-	/* Populate frame */
+	/* Keep track of offset */
+
+//	driver_data->slice_offset[obj_surface->input_buf_index] += obj_buffer->size;
+
+/*
 	char *src_buf = mmap(NULL, obj_buffer->size,
 			PROT_READ | PROT_WRITE, MAP_SHARED,
 			driver_data->mem2mem_fd, buf.m.planes[0].m.mem_offset);
 	assert(src_buf != MAP_FAILED);
-	memcpy(src_buf, obj_buffer->buffer_data, obj_buffer->size);
 
-	obj_context->mpeg2_frame_hdr.slice_pos = 0;
-	obj_context->mpeg2_frame_hdr.slice_len = obj_buffer->size*8;
+printf("Queried buffer for index %d is at 0x%x\n", buf.index, src_buf);
+printf("obj buffer is at 0x%x\n", obj_buffer->buffer_data);
+
+printf("plane mem offset 0x%x\n", buf.m.planes[0].m.mem_offset);
+
+
+	memcpy(src_buf, obj_buffer->buffer_data, obj_buffer->size);
+//	munmap(src_buf);
+*/
+
+
+
+	printf("slice size at populate time: %d\n", obj_buffer->size);
 
 	return vaStatus;
 }
@@ -80,6 +98,10 @@ VAStatus sunxi_cedrus_render_mpeg2_picture_parameter(VADriverContextP ctx,
 	INIT_DRIVER_DATA
 	VAStatus vaStatus = VA_STATUS_SUCCESS;
 
+	printf("> %s()\n", __func__);
+
+	printf("%s with buffer %x data %x\n", __func__, obj_buffer, obj_buffer->buffer_data);
+
 	VAPictureParameterBufferMPEG2 *pic_param = (VAPictureParameterBufferMPEG2 *)obj_buffer->buffer_data;
 	obj_context->mpeg2_frame_hdr.type = MPEG2;
 
@@ -87,6 +109,20 @@ VAStatus sunxi_cedrus_render_mpeg2_picture_parameter(VADriverContextP ctx,
 	obj_context->mpeg2_frame_hdr.height = pic_param->vertical_size;
 
 	obj_context->mpeg2_frame_hdr.picture_coding_type = pic_param->picture_coding_type;
+
+	char slice;
+
+	if (pic_param->picture_coding_type == 0)
+		slice = 'B';
+	else if (pic_param->picture_coding_type == 1)
+		slice = 'P';
+	else if (pic_param->picture_coding_type == 2)
+		slice = 'I';
+	else
+		slice = 'U';
+
+	printf(">> %s: got a %c slice!\n", __func__, slice);
+
 	obj_context->mpeg2_frame_hdr.f_code[0][0] = (pic_param->f_code >> 12) & 0xf;
 	obj_context->mpeg2_frame_hdr.f_code[0][1] = (pic_param->f_code >>  8) & 0xf;
 	obj_context->mpeg2_frame_hdr.f_code[1][0] = (pic_param->f_code >>  4) & 0xf;
@@ -101,18 +137,51 @@ VAStatus sunxi_cedrus_render_mpeg2_picture_parameter(VADriverContextP ctx,
 	obj_context->mpeg2_frame_hdr.intra_vlc_format = pic_param->picture_coding_extension.bits.intra_vlc_format;
 	obj_context->mpeg2_frame_hdr.alternate_scan = pic_param->picture_coding_extension.bits.alternate_scan;
 
+
 	object_surface_p fwd_surface = SURFACE(pic_param->forward_reference_picture);
+printf("getting forward / backwards from %x at %x\n", pic_param->forward_reference_picture, fwd_surface);
 	if(fwd_surface)
 		obj_context->mpeg2_frame_hdr.forward_index = fwd_surface->output_buf_index;
 	else
 		obj_context->mpeg2_frame_hdr.forward_index = obj_surface->output_buf_index;
+
+
 	object_surface_p bwd_surface = SURFACE(pic_param->backward_reference_picture);
+printf("getting forward / backwards from %x at %x\n", pic_param->backward_reference_picture, bwd_surface);
 	if(bwd_surface)
 		obj_context->mpeg2_frame_hdr.backward_index = bwd_surface->output_buf_index;
 	else
 		obj_context->mpeg2_frame_hdr.backward_index = obj_surface->output_buf_index;
 
+	printf("forward buffer %d\n", obj_surface->output_buf_index);
+
 	return vaStatus;
 }
 
+VAStatus sunxi_cedrus_render_mpeg2_slice_parameter(VADriverContextP ctx,
+		object_context_p obj_context, object_surface_p obj_surface,
+		object_buffer_p obj_buffer)
+{
+	VASliceParameterBufferMPEG2 *slice_param = (VASliceParameterBufferMPEG2 *)obj_buffer->buffer_data;
 
+	printf("> %s()\n", __func__);
+
+/*
+	obj_context->mpeg2_frame_hdr.slice_pos = slice_param->slice_data_offset * 8 + slice_param->macroblock_offset;
+	obj_context->mpeg2_frame_hdr.slice_len = slice_param->slice_data_size * 8;
+*/
+	if (slice_param->slice_data_flag == VA_SLICE_DATA_FLAG_ALL)
+		printf("Whole slice is in the buffer my friend!\n");
+	else if (slice_param->slice_data_flag == VA_SLICE_DATA_FLAG_BEGIN)
+		printf("The slice is only beginning my friend!\n");
+	else if (slice_param->slice_data_flag == VA_SLICE_DATA_FLAG_MIDDLE)
+		printf("The slice is in the middle my friend!\n");
+	else if (slice_param->slice_data_flag == VA_SLICE_DATA_FLAG_END)
+		printf("This is the last slice my friend!\n");
+
+	printf("slice size at slice time: %d with offset %d and mb offset %d\n", slice_param->slice_data_size, slice_param->slice_data_offset, slice_param->macroblock_offset);
+
+//	obj_context->mpeg2_frame_hdr.quant_scale = slice_param->quantiser_scale_code; // FIXME TODO
+
+	return VA_STATUS_SUCCESS;
+}

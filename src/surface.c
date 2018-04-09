@@ -65,9 +65,13 @@ VAStatus sunxi_cedrus_CreateSurfaces(VADriverContextP ctx, int width,
 
 	memset(planes, 0, 2 * sizeof(struct v4l2_plane));
 
+	printf("%s()\n", __func__);
+
 	/* We only support one format */
 	if (VA_RT_FORMAT_YUV420 != format)
 		return VA_STATUS_ERROR_UNSUPPORTED_RT_FORMAT;
+
+	printf("%s() format is good\n", __func__);
 
 	/* Set format for capture */
 	memset(&(fmt), 0, sizeof(fmt));
@@ -89,7 +93,7 @@ VAStatus sunxi_cedrus_CreateSurfaces(VADriverContextP ctx, int width,
 
 	for (i = 0; i < create_bufs.count; i++)
 	{
-		int surfaceID = object_heap_allocate(&driver_data->surface_heap);
+		VASurfaceID surfaceID = object_heap_allocate(&driver_data->surface_heap);
 		object_surface_p obj_surface = SURFACE(surfaceID);
 		if (NULL == obj_surface)
 		{
@@ -99,10 +103,12 @@ VAStatus sunxi_cedrus_CreateSurfaces(VADriverContextP ctx, int width,
 		obj_surface->surface_id = surfaceID;
 		surfaces[i] = surfaceID;
 
+		printf("%s: registering surface with ID %d\n", __func__, surfaceID);
+
 		memset(&(buf), 0, sizeof(buf));
 		buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
 		buf.memory = V4L2_MEMORY_MMAP;
-		buf.index = create_bufs.index + i;
+		buf.index = create_bufs.index + i; // FIXME that's just i isn't it?
 		buf.length = 2;
 		buf.m.planes = planes;
 
@@ -119,7 +125,7 @@ VAStatus sunxi_cedrus_CreateSurfaces(VADriverContextP ctx, int width,
 		assert(driver_data->chroma_bufs[buf.index] != MAP_FAILED);
 
 		obj_surface->input_buf_index = 0;
-		obj_surface->output_buf_index = create_bufs.index + i;
+		obj_surface->output_buf_index = create_bufs.index + i; // FIXME that's just i isn't it?
 
 		obj_surface->width = width;
 		obj_surface->height = height;
@@ -177,17 +183,29 @@ VAStatus sunxi_cedrus_SyncSurface(VADriverContextP ctx,
 	if(obj_surface->status == VASurfaceSkipped)
 		return VA_STATUS_ERROR_UNKNOWN;
 
+	printf("%s(%d)\n", __func__, render_target);
+
+	printf("%s: Going with %d\n", __func__, obj_surface->input_buf_index);
+
 	request_fd = driver_data->request_fds[obj_surface->input_buf_index];
 	if(request_fd < 0)
 		return  VA_STATUS_ERROR_UNKNOWN;
 
+	printf("%s: submitting request\n", __func__);
+	assert(ioctl(request_fd, MEDIA_REQUEST_IOC_SUBMIT, NULL)==0);
+
 	FD_ZERO(&read_fds);
 	FD_SET(request_fd, &read_fds);
 
-	rc = select(request_fd + 1, &read_fds, NULL, NULL, &tv);
-	// FIXME: Properly dispose of the buffers here?
-	if(rc < 0)
+	rc = select(request_fd + 1, &read_fds, NULL, NULL, NULL);
+
+	printf("%s: select rc is %d\n", __func__, rc);
+
+	if(rc <= 0)
+		// FIXME: Properly dispose of the buffers here, also reinit request when it fails, also set surface status
 		return VA_STATUS_ERROR_UNKNOWN;
+
+	assert(ioctl(request_fd, MEDIA_REQUEST_IOC_REINIT, NULL)==0);
 
 	memset(&(buf), 0, sizeof(buf));
 	buf.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
@@ -208,14 +226,13 @@ VAStatus sunxi_cedrus_SyncSurface(VADriverContextP ctx,
 	buf.length = 2;
 	buf.m.planes = planes;
 
-	obj_surface->status = VASurfaceReady;
 
 	if(ioctl(driver_data->mem2mem_fd, VIDIOC_DQBUF, &buf)) {
 		sunxi_cedrus_msg("Error when dequeuing output: %s\n", strerror(errno));
 		return VA_STATUS_ERROR_UNKNOWN;
 	}
 
-	assert(ioctl(request_fd, MEDIA_REQUEST_IOC_REINIT, NULL)==0);
+	obj_surface->status = VASurfaceReady;
 
 	return VA_STATUS_SUCCESS;
 }

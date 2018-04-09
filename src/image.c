@@ -54,6 +54,10 @@ VAStatus sunxi_cedrus_CreateImage(VADriverContextP ctx, VAImageFormat *format,
 	int sizeY, sizeUV;
 	object_image_p obj_img;
 
+	printf("> %s(0x%x, %d, %d)\n", __func__, format, width, height);
+
+	memset(image, 0, sizeof(VAImage));
+
 	image->format = *format;
 	image->buf = VA_INVALID_ID;
 	image->width = width;
@@ -72,12 +76,19 @@ VAStatus sunxi_cedrus_CreateImage(VADriverContextP ctx, VAImageFormat *format,
 	image->image_id = object_heap_allocate(&driver_data->image_heap);
 	if (image->image_id == VA_INVALID_ID)
 		return VA_STATUS_ERROR_ALLOCATION_FAILED;
+
 	obj_img = IMAGE(image->image_id);
 
+	printf("output data size for image is %d\n", image->data_size);
+
 	if (sunxi_cedrus_CreateBuffer(ctx, 0, VAImageBufferType, image->data_size,
-	    1, NULL, &image->buf) != VA_STATUS_SUCCESS)
+	    1, NULL, &image->buf) != VA_STATUS_SUCCESS) {
+		// TODO: free image object
 		return VA_STATUS_ERROR_ALLOCATION_FAILED;
+	}
 	obj_img->buf = image->buf;
+
+	printf("> %s(%d)\n", __func__, image->image_id);
 
 	return VA_STATUS_SUCCESS;
 }
@@ -91,21 +102,34 @@ VAStatus sunxi_cedrus_DeriveImage(VADriverContextP ctx, VASurfaceID surface,
 	object_buffer_p obj_buffer;
 	VAStatus ret;
 
+	printf("> %s(%d)\n", __func__, surface);
+
 	obj_surface = SURFACE(surface);
 	fmt.fourcc = VA_FOURCC_NV12;
 
-	ret = sunxi_cedrus_CreateImage(ctx, &fmt, obj_surface->width,
-			obj_surface->height, image);
+	if(obj_surface->status == VASurfaceRendering) {
+printf("%s: Sync surface here\n", __func__);
+		sunxi_cedrus_SyncSurface(ctx, surface);
+	}
+
+	printf("%s: surface index %d\n", __func__, obj_surface->output_buf_index);
+
+	ret = sunxi_cedrus_CreateImage(ctx, &fmt, obj_surface->width, obj_surface->height, image);
 	if(ret != VA_STATUS_SUCCESS)
 		return ret;
 
 	obj_buffer = BUFFER(image->buf);
-	if (NULL == obj_buffer)
+	printf("%s() I gotz the buffer %x/%x\n", __func__, obj_buffer, obj_buffer->buffer_data);
+	if (obj_buffer == NULL)
 		return VA_STATUS_ERROR_ALLOCATION_FAILED;
 
 	/* TODO: Use an appropriate DRM plane instead */
 	tiled_to_planar(driver_data->luma_bufs[obj_surface->output_buf_index], obj_buffer->buffer_data, image->pitches[0], image->width, image->height);
 	tiled_to_planar(driver_data->chroma_bufs[obj_surface->output_buf_index], obj_buffer->buffer_data + image->width*image->height, image->pitches[1], image->width, image->height/2);
+
+	printf("%s() done YUV\n", __func__);
+
+	printf("< %s()\n", __func__);
 
 	return VA_STATUS_SUCCESS;
 }
@@ -118,7 +142,16 @@ VAStatus sunxi_cedrus_DestroyImage(VADriverContextP ctx, VAImageID image)
 	obj_img = IMAGE(image);
 	assert(obj_img);
 
+	printf("> %s(%d)\n", __func__, image);
+
 	sunxi_cedrus_DestroyBuffer(ctx, obj_img->buf);
+
+	printf("freeing the buffer image heap now my friend\n");
+	object_heap_free(&driver_data->image_heap, &obj_img->base);
+	printf("done freeing the image heap now my friend\n");
+
+	printf("< %s()\n", __func__);
+
 	return VA_STATUS_SUCCESS;
 }
 

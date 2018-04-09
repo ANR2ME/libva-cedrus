@@ -57,6 +57,8 @@ VAStatus sunxi_cedrus_CreateContext(VADriverContextP ctx, VAConfigID config_id,
 	struct v4l2_format fmt;
 	enum v4l2_buf_type type;
 
+	printf("> %s(%d, %d, %d, 0x%x, %d)\n", __func__, config_id, picture_width, picture_height, flag, num_render_targets);
+
 	obj_config = CONFIG(config_id);
 	if (NULL == obj_config)
 	{
@@ -72,7 +74,7 @@ VAStatus sunxi_cedrus_CreateContext(VADriverContextP ctx, VAConfigID config_id,
 		return vaStatus;
 	}
 
-	obj_context->context_id  = contextID;
+	obj_context->context_id = contextID;
 	*context = contextID;
 	obj_context->current_render_target = -1;
 	obj_context->config_id = config_id;
@@ -115,7 +117,7 @@ VAStatus sunxi_cedrus_CreateContext(VADriverContextP ctx, VAConfigID config_id,
 	fmt.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
 	fmt.fmt.pix_mp.width = picture_width;
 	fmt.fmt.pix_mp.height = picture_height;
-	fmt.fmt.pix_mp.plane_fmt[0].sizeimage = INPUT_BUFFER_MAX_SIZE;
+	fmt.fmt.pix_mp.plane_fmt[0].sizeimage = INPUT_BUFFER_MAX_SIZE * INPUT_BUFFERS_NB;
 	switch(obj_config->profile) {
 		case VAProfileMPEG2Simple:
 		case VAProfileMPEG2Main:
@@ -148,6 +150,8 @@ VAStatus sunxi_cedrus_CreateContext(VADriverContextP ctx, VAConfigID config_id,
 	type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
 	assert(ioctl(driver_data->mem2mem_fd, VIDIOC_STREAMON, &type)==0);
 
+	printf("> %s(%d)\n", __func__, contextID);
+
 	return vaStatus;
 }
 
@@ -156,6 +160,16 @@ VAStatus sunxi_cedrus_DestroyContext(VADriverContextP ctx, VAContextID context)
 	INIT_DRIVER_DATA
 	object_context_p obj_context = CONTEXT(context);
 	assert(obj_context);
+	enum v4l2_buf_type type;
+
+	printf("%s: streamoff\n", __func__);
+
+	type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
+	ioctl(driver_data->mem2mem_fd, VIDIOC_STREAMOFF, &type);
+	type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+	ioctl(driver_data->mem2mem_fd, VIDIOC_STREAMOFF, &type);
+
+	printf("%s: destroying context\n", __func__);
 
 	obj_context->context_id = -1;
 	obj_context->config_id = -1;
