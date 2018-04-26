@@ -97,6 +97,179 @@ VAStatus SunxiCedrusDestroyImage(VADriverContextP context, VAImageID image_id)
 	return VA_STATUS_SUCCESS;
 }
 
+void ConvertMb32420ToNv21Y(char* pSrc,char* pDst,int nWidth, int nHeight)
+{
+	int nMbWidth = 0;
+	int nMbHeight = 0;
+	int i = 0;
+	int j = 0;
+	int m = 0;
+	int k = 0;
+    int nLineStride=0;
+    int lineNum = 0;
+    int offset = 0;
+    char* ptr = NULL;
+    char *dstAsm = NULL;
+    char *srcAsm = NULL;
+    char bufferU[32];
+    int nWidthMatchFlag = 0;
+    int nCopyMbWidth = 0;
+
+    nLineStride = (nWidth + 15) &~15;
+    nMbWidth = (nWidth+31)&~31;
+    nMbWidth /= 32;
+
+    nMbHeight = (nHeight+31)&~31;
+    nMbHeight /= 32;
+    ptr = pSrc;
+
+    nWidthMatchFlag = 0;
+	nCopyMbWidth = nMbWidth-1;
+
+    if(nMbWidth*32 == nLineStride)
+    {
+    	nWidthMatchFlag = 1;
+    	nCopyMbWidth = nMbWidth;
+
+    }
+    for(i=0; i<nMbHeight; i++)
+    {
+    	for(j=0; j<nCopyMbWidth; j++)
+    	{
+    		for(m=0; m<32; m++)
+    		{
+    			if((i*32 + m) >= nHeight)
+    		  	{
+    				ptr += 32;
+    		    	continue;
+    		  	}
+    			srcAsm = ptr;
+    			lineNum = i*32 + m;           //line num
+    			offset =  lineNum*nLineStride + j*32;
+    			dstAsm = pDst+ offset;
+
+    			 asm volatile (
+    					        "vld1.8         {d0 - d3}, [%[srcAsm]]              \n\t"
+    					        "vst1.8         {d0 - d3}, [%[dstAsm]]              \n\t"
+    					       	: [dstAsm] "+r" (dstAsm), [srcAsm] "+r" (srcAsm)
+    					       	:  //[srcY] "r" (srcY)
+    					       	: "cc", "memory", "d0", "d1", "d2", "d3", "d4", "d5", "d6", "d16", "d17", "d18", "d19", "d20", "d21", "d22", "d23", "d24", "d28", "d29", "d30", "d31");
+    			ptr += 32;
+    		}
+    	}
+
+    	if(nWidthMatchFlag == 1)
+    	{
+    		continue;
+    	}
+    	for(m=0; m<32; m++)
+    	{
+    		if((i*32 + m) >= nHeight)
+    		{
+    			ptr += 32;
+    	    	continue;
+    	   	}
+    		dstAsm = bufferU;
+    		srcAsm = ptr;
+    	 	lineNum = i*32 + m;           //line num
+    		offset =  lineNum*nLineStride + j*32;
+
+    	   	 asm volatile (
+    	    	      "vld1.8         {d0 - d3}, [%[srcAsm]]              \n\t"
+    	              "vst1.8         {d0 - d3}, [%[dstAsm]]              \n\t"
+    	         	    : [dstAsm] "+r" (dstAsm), [srcAsm] "+r" (srcAsm)
+    	    	     	:  //[srcY] "r" (srcY)
+    	    	    	: "cc", "memory", "d0", "d1", "d2", "d3", "d4", "d5", "d6", "d16", "d17", "d18", "d19", "d20", "d21", "d22", "d23", "d24", "d28", "d29", "d30", "d31");
+    	   	ptr += 32;
+    	   	for(k=0; k<32; k++)
+    	   	{
+    	   		if((j*32+ k) >= nLineStride)
+    	   	   	{
+    	   			break;
+    	   	  	}
+    	   	 	pDst[offset+k] = bufferU[k];
+    	   	}
+    	}
+    }
+}
+
+
+void ConvertMb32420ToNv21C(char* pSrc,char* pDst,int nPicWidth, int nPicHeight)
+{
+	int nMbWidth = 0;
+	int nMbHeight = 0;
+	int i = 0;
+	int j = 0;
+	int m = 0;
+	int k = 0;
+    int nLineStride=0;
+    int lineNum = 0;
+    int offset = 0;
+    char* ptr = NULL;
+    char *dst0Asm = NULL;
+    char *dst1Asm = NULL;
+    char *srcAsm = NULL;
+    char bufferV[16], bufferU[16];
+    int nWidth = 0;
+    int nHeight = 0;
+
+    nWidth = (nPicWidth+1)/2;
+    nHeight = (nPicHeight+1)/2;
+
+    nLineStride = (nWidth*2 + 15) &~15;
+    nMbWidth = (nWidth*2+31)&~31;
+    nMbWidth /= 32;
+
+    nMbHeight = (nHeight+31)&~31;
+    nMbHeight /= 32;
+
+
+    ptr = pSrc;
+
+    for(i=0; i<nMbHeight; i++)
+    {
+    	for(j=0; j<nMbWidth; j++)
+    	{
+    		for(m=0; m<32; m++)
+    		{
+    			if((i*32 + m) >= nHeight)
+    			{
+    				ptr += 32;
+    				continue;
+        		}
+
+    			dst0Asm = bufferU;
+    			dst1Asm = bufferV;
+    			srcAsm = ptr;
+    			lineNum = i*32 + m;           //line num
+    			offset =  lineNum*nLineStride + j*32;
+
+    			asm volatile(
+    					"vld2.8         {d0-d3}, [%[srcAsm]]              \n\t"
+    			    	"vst1.8         {d0,d1}, [%[dst0Asm]]              \n\t"
+    			    	"vst1.8         {d2,d3}, [%[dst1Asm]]              \n\t"
+    			    	: [dst0Asm] "+r" (dst0Asm), [dst1Asm] "+r" (dst1Asm), [srcAsm] "+r" (srcAsm)
+    			        :  //[srcY] "r" (srcY)
+    			        : "cc", "memory", "d0", "d1", "d2", "d3", "d4", "d5", "d6", "d16", "d17", "d18", "d19", "d20", "d21", "d22", "d23", "d24", "d28", "d29", "d30", "d31"
+    			     );
+    			ptr += 32;
+
+
+    			for(k=0; k<16; k++)
+    			{
+    				if((j*32+ 2*k) >= nLineStride)
+    				{
+    					break;
+    				}
+    				pDst[offset+2*k]   = bufferV[k];
+    			   	pDst[offset+2*k+1] = bufferU[k];
+    			}
+    		}
+    	}
+    }
+}
+
+
 VAStatus SunxiCedrusDeriveImage(VADriverContextP context,
 	VASurfaceID surface_id, VAImage *image)
 {
@@ -130,8 +303,11 @@ VAStatus SunxiCedrusDeriveImage(VADriverContextP context,
 		return VA_STATUS_ERROR_INVALID_BUFFER;
 
 	/* TODO: Use an appropriate DRM plane instead */
-	tiled_to_planar(surface_object->destination_data[0], buffer_object->data, image->pitches[0], image->width, image->height);
-	tiled_to_planar(surface_object->destination_data[1], buffer_object->data + image->width*image->height, image->pitches[1], image->width, image->height/2);
+	ConvertMb32420ToNv21Y(surface_object->destination_data[0], buffer_object->data, image->width, image->height);
+	ConvertMb32420ToNv21C(surface_object->destination_data[1], buffer_object->data + image->width*image->height, image->width, image->height);
+
+//	tiled_to_planar(surface_object->destination_data[0], buffer_object->data, image->pitches[0], image->width, image->height);
+//	tiled_to_planar(surface_object->destination_data[1], buffer_object->data + image->width*image->height, image->pitches[1], image->width, image->height/2);
 
 	surface_object->status = VASurfaceReady;
 
